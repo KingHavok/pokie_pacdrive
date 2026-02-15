@@ -1,0 +1,4 @@
+# Local backup artifacts created by scripts/create_full_backup.sh
+backups/*.bundle
+backups/*.tar.gz
+backups/*.sha256
