@@ -35,7 +35,7 @@ litButtonColor := 0xFFFF00
 ; avoid a per-pixel conversion inside the timer loop.
 litButtonColorBGR := ((litButtonColor & 0xFF) << 16) | (litButtonColor & 0xFF00) | ((litButtonColor >> 16) & 0xFF)
 
-buttn := [ ;Each button requires [x coord, y coord, LED #].
+buttons := [ ;Each button requires [x coord, y coord, LED #].
 	[700, 35, 12], ; Reserve/Gamble
 	[780, 35, 0], ; Bet 1
 	[860, 35, 1], ; Bet 2
@@ -55,11 +55,11 @@ buttn := [ ;Each button requires [x coord, y coord, LED #].
 ; Compute the bounding box of all button coordinates so we can capture the
 ; entire region in a single BitBlt call. A 2px margin avoids edge-pixel issues.
 captureMargin := 2
-captureMinX := buttn[1][1]
-captureMinY := buttn[1][2]
-captureMaxX := buttn[1][1]
-captureMaxY := buttn[1][2]
-for button in buttn {
+captureMinX := buttons[1][1]
+captureMinY := buttons[1][2]
+captureMaxX := buttons[1][1]
+captureMaxY := buttons[1][2]
+for button in buttons {
     if (button[1] < captureMinX)
         captureMinX := button[1]
     if (button[2] < captureMinY)
@@ -77,16 +77,16 @@ captureH := (captureMaxY - captureMinY) + (captureMargin * 2) + 1
 ; Precompute per-button lookup values once to avoid repeated math per timer tick.
 ; localX/localY are the button's offset within the capture bitmap.
 buttonBindings := []
-for button in buttn {
+for button in buttons {
     ledNumber := button[3]
-    grp := Floor(ledNumber / 8) + 1
+    grp := (ledNumber // 8) + 1
     port := Mod(ledNumber, 8)
-    buttonBindings.Push(Map(
-        "localX", button[1] - captureX,
-        "localY", button[2] - captureY,
-        "grp", grp,
-        "mask", 1 << port
-    ))
+    buttonBindings.Push({
+        localX: button[1] - captureX,
+        localY: button[2] - captureY,
+        grp: grp,
+        mask: 1 << port
+    })
 }
 
 ; Tracks the previously-written 8-bit LED state per group.
@@ -132,9 +132,17 @@ for grp in groups { ; turn all LEDs off. LEDs will turn off in groups.
 ; Create GDI resources once and reuse them every tick. BitBlt overwrites the
 ; bitmap contents each time so there is no accumulation or leak.
 hdcScreen := DllCall("GetDC", "Ptr", 0, "Ptr")
+if (hdcScreen = 0) {
+    MsgBox "Failed to get screen device context."
+    ExitApp
+}
 hdcMem := DllCall("CreateCompatibleDC", "Ptr", hdcScreen, "Ptr")
 hBitmap := DllCall("CreateCompatibleBitmap", "Ptr", hdcScreen, "Int", captureW, "Int", captureH, "Ptr")
 hOldBmp := DllCall("SelectObject", "Ptr", hdcMem, "Ptr", hBitmap, "Ptr")
+if (hdcMem = 0 || hBitmap = 0) {
+    MsgBox "Failed to create GDI resources for screen capture."
+    ExitApp
+}
 
 SetTimer(checkButtons, checkIntervalMs) ; Call the checkButtons function every checkIntervalMs.
 
@@ -163,12 +171,14 @@ checkButtons() {
     }
 
     for binding in buttonBindings {
+        ; CLR_INVALID (0xFFFFFFFF) won't match litButtonColorBGR, so
+        ; a failed GetPixel safely leaves the LED off.
         color := DllCall("GetPixel", "Ptr", hdcMem,
-                         "Int", binding["localX"],
-                         "Int", binding["localY"], "UInt")
+                         "Int", binding.localX,
+                         "Int", binding.localY, "UInt")
         if (color = litButtonColorBGR) {
-            grp := binding["grp"]
-            desiredGroupStates[grp] := desiredGroupStates[grp] | binding["mask"]
+            grp := binding.grp
+            desiredGroupStates[grp] := desiredGroupStates[grp] | binding.mask
         }
     }
 
@@ -226,7 +236,7 @@ ResolvePacDriveDll(preferredDllName) {
 
 OnExit(finish)
 
-finish(ExitReason, ExitCode) {
+finish(_ExitReason, _ExitCode) {
     global hModule, hdcScreen, hdcMem, hBitmap, hOldBmp, dllName, groups, deviceID
 
     ; Turn all LEDs off before shutting down.
